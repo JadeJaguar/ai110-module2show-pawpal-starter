@@ -7,10 +7,15 @@
 - Briefly describe your initial UML design.
 - What classes did you include, and what responsibilities did you assign to each?
 
+    My initial design had four classes: Owner, Pet, Task, and Schedule. Owner holds basic profile info and a list of pets, Pet holds the animal's info and its associated tasks, Task represents a single care activity with a name, duration, and priority, and Schedule takes those tasks and produces a daily plan.
+
 **b. Design changes**
 
 - Did your design change during implementation?
+    Yes 
 - If yes, describe at least one change and why you made it.
+    
+    As the design evolved from concept to implementation, it became clear that four classes weren't enough to support real scheduling logic. Each new class solved a specific gap: ScheduledTask was needed to attach a start and end time to a task once placed, DailySchedule was needed to track both what fit and what didn't, TimeWindow was needed to represent when the owner is actually available, and SchedulerConfig was needed to make the scheduler's behavior adjustable. The three enums (TaskType, Priority, TaskStatus) were added to keep task data consistent and prevent errors from free-text strings.
 
 ---
 
@@ -21,10 +26,22 @@
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+    The scheduler considers three constraints: available time (the owner sets a daily minute budget and no task is placed if it would exceed it), task priority (each task has a CRITICAL/HIGH/MEDIUM/LOW level that drives its urgency score), and due time (tasks that are overdue get a +10 score bonus, and tasks due within 2 hours get a +2 bonus, so urgency increases as deadlines approach). Preferred time windows can be stored on each task, but the current scheduler does not enforce them during placement — that is a known gap.
+
+    Available time was treated as the hardest constraint because there is no way around it: if the owner only has 2 hours, the schedule cannot physically exceed that. Priority was treated as the most important ordering constraint because pet care tasks have real health consequences — a missed medication is more serious than a missed grooming session — so the algorithm needs to protect high-priority tasks first. Due-time bonuses were added on top of priority so that an upcoming deadline can temporarily elevate a normally lower-priority task above one that has no deadline pressure.
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
+
+    **Tradeoff: Greedy scheduling over an optimal search**
+
+    The scheduler uses a greedy algorithm — it sorts all tasks by urgency score once, then places them into time slots in that order, taking the first slot that fits and never revisiting earlier decisions. This means it can miss arrangements that would fit more tasks overall. For example, if a 60-minute LOW priority task is somehow scored first, it could block three 20-minute HIGH priority tasks from fitting, even though dropping the LOW task would have allowed all three in.
+
+    This tradeoff is reasonable for a daily pet care app for several reasons. First, tasks are sorted by priority before placement, so the greedy order closely mirrors what a human would choose anyway — critical and high-priority tasks go first. Second, the scheduler runs in milliseconds on a small list (5–20 tasks), so there is no performance pressure that would justify a more complex algorithm like dynamic programming or backtracking. Third, pet owners reviewing the schedule can manually override start times or adjust available minutes, so a "good enough" automated plan that they can tweak is more practical than a theoretically optimal plan that takes longer to compute and harder to explain.
+
+    The main cost of this tradeoff is that the scheduler only checks for exact time-slot overlap after the fact (via `check_conflicts()`), rather than proactively finding a conflict-free arrangement. A future improvement would be to enforce preferred time windows during placement, so tasks the owner flagged for a specific time of day are placed there rather than stacked at the start of the day.
 
 ---
 

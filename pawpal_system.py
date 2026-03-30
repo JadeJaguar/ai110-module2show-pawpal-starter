@@ -92,6 +92,40 @@ class Task:
         """Set status to COMPLETED."""
         self.status = TaskStatus.COMPLETED
 
+    def generate_next_occurrence(self) -> Optional[Task]:
+        """If this task is recurring, return a new Task instance for the next occurrence.
+
+        recurrence_rule="daily"  → due_datetime = now + 1 day
+        recurrence_rule="weekly" → due_datetime = now + 7 days
+        Returns None if the task is not recurring or the rule is unrecognised.
+        """
+        if not self.is_recurring or not self.recurrence_rule:
+            return None
+
+        rule = self.recurrence_rule.lower()
+        # Dict lookup is preferred over if/elif: adding new rules is one line.
+        recurrence_deltas = {
+            "daily": timedelta(days=1),
+            "weekly": timedelta(weeks=1),
+        }
+        delta = recurrence_deltas.get(rule)
+        if delta is None:
+            return None
+        next_due = datetime.now() + delta
+
+        return Task(
+            name=self.name,
+            task_type=self.task_type,
+            priority=self.priority,
+            duration_minutes=self.duration_minutes,
+            pet_id=self.pet_id,
+            preferred_window=self.preferred_window,
+            is_recurring=self.is_recurring,
+            recurrence_rule=self.recurrence_rule,
+            due_datetime=next_due,
+            notes=f"Auto-generated from recurring task (rule: {self.recurrence_rule})",
+        )
+
     def mark_skipped(self, reason: str) -> None:
         """Set status to SKIPPED and record reason in notes."""
         self.status = TaskStatus.SKIPPED
@@ -176,6 +210,59 @@ class DailySchedule:
             return 0.0
         completed = sum(1 for st in self.scheduled_tasks if st.task.status == TaskStatus.COMPLETED)
         return completed / len(self.scheduled_tasks)
+
+    def sort_by_time(self) -> list[ScheduledTask]:
+        """Return scheduled tasks sorted by start time (earliest first).
+
+        Uses a lambda key so Python's sorted() compares datetime objects
+        directly — no string parsing needed.
+        """
+        return sorted(self.scheduled_tasks, key=lambda st: st.start_time)
+
+    def sort_by_priority(self) -> list[ScheduledTask]:
+        """Return scheduled tasks sorted by priority (highest first).
+
+        Priority enum values: CRITICAL=4, HIGH=3, MEDIUM=2, LOW=1.
+        reverse=True puts the highest value first.
+        """
+        return sorted(self.scheduled_tasks, key=lambda st: st.task.priority.value, reverse=True)
+
+    def filter_by_status(self, status: TaskStatus) -> list[ScheduledTask]:
+        """Return only scheduled tasks whose underlying task matches the given status.
+
+        Useful for separating completed tasks from still-pending ones after the
+        owner has been checking off items throughout the day.
+
+        Args:
+            status: A TaskStatus enum value (e.g. TaskStatus.COMPLETED,
+                    TaskStatus.SCHEDULED, TaskStatus.SKIPPED).
+
+        Returns:
+            A new list of ScheduledTask objects whose task.status == status.
+            Returns an empty list if no tasks match.
+
+        Example:
+            done = schedule.filter_by_status(TaskStatus.COMPLETED)
+        """
+        return [st for st in self.scheduled_tasks if st.task.status == status]
+
+    def filter_by_pet(self, pet_id: str) -> list[ScheduledTask]:
+        """Return only scheduled tasks belonging to a specific pet.
+
+        Allows an owner with multiple pets to view one animal's plan in isolation
+        without regenerating the full schedule.
+
+        Args:
+            pet_id: The UUID string of the pet to filter by (Pet.pet_id).
+
+        Returns:
+            A new list of ScheduledTask objects whose task.pet_id matches pet_id.
+            Returns an empty list if the pet has no scheduled tasks today.
+
+        Example:
+            mochi_tasks = schedule.filter_by_pet(mochi.pet_id)
+        """
+        return [st for st in self.scheduled_tasks if st.task.pet_id == pet_id]
 
     def to_dict(self) -> dict:
         """Serialize the schedule to a plain dict (for display / export)."""
@@ -460,7 +547,29 @@ class Scheduler:
         return scheduled
 
     def check_conflicts(self, schedule: DailySchedule) -> list[ScheduledTask]:
-        """Return any ScheduledTasks that overlap in time."""
+        """Detect and return all ScheduledTasks whose time windows overlap.
+
+        Uses an O(n²) pairwise comparison — acceptable for the small task lists
+        typical of a daily pet care schedule (usually fewer than 20 tasks).
+        Each conflicting task is also flagged with is_conflict=True so the UI
+        can highlight it without re-running this method.
+
+        This method does not raise exceptions or modify the schedule structure;
+        it only annotates tasks and returns the conflicting subset, so callers
+        can display a warning rather than crashing.
+
+        Args:
+            schedule: The DailySchedule to inspect.
+
+        Returns:
+            A deduplicated list of ScheduledTask objects involved in at least
+            one overlap. Returns an empty list if the schedule is conflict-free.
+
+        Example:
+            conflicts = scheduler.check_conflicts(schedule)
+            if conflicts:
+                print(f"{len(conflicts)} tasks have time conflicts.")
+        """
         conflicts: list[ScheduledTask] = []
         tasks = schedule.scheduled_tasks
         for i, a in enumerate(tasks):
