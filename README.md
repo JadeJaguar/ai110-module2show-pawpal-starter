@@ -52,6 +52,36 @@ Phase 4 added an algorithmic layer on top of the core scheduler. Here is what is
 
 ---
 
+## Testing PawPal+
+
+### Run the tests
+
+```bash
+python -m pytest        # quick pass/fail summary
+python -m pytest -v     # verbose — shows every test name and result
+```
+
+### What the tests cover
+
+The test suite in `tests/test_pawpal.py` contains **31 tests** across 6 behavioral groups:
+
+| Group | Tests | What it verifies |
+|-------|-------|-----------------|
+| **Urgency scoring** | 5 | Base priority scores, +10 overdue bonus, +2 near-deadline bonus, completed tasks don't get overdue bonus |
+| **Task prioritization** | 3 | High-priority tasks sort before low, overdue low task outranks fresh critical, empty list handled safely |
+| **Greedy scheduling** | 5 | Tasks fit within time budget, oversized tasks are skipped, 10-min buffer applied between tasks, edge case of exact-fit budget |
+| **Conflict detection** | 5 | Non-overlapping tasks produce no conflicts, exact-same-time tasks both flagged, partial overlap flagged, adjacent tasks (touching endpoints) are not conflicts, empty schedule handled |
+| **Recurring tasks** | 6 | Daily rule creates task due tomorrow, weekly rule creates task due in 7 days, new task inherits all properties, non-recurring returns None, unknown rule returns None gracefully |
+| **Sorting & filtering** | 5 | `sort_by_time()` returns chronological order, sort doesn't mutate original list, `sort_by_priority()` puts CRITICAL first, `filter_by_pet()` returns correct subset, unknown pet returns empty list |
+
+### Confidence level
+
+**4 / 5 stars**
+
+All 31 tests pass and cover the core scheduling logic end-to-end — urgency scoring, greedy time assignment, conflict detection, and recurring task generation. The main gap is that the tests run against in-memory state only; there are no integration tests for the Streamlit UI layer or for the `respect_preferred_windows` scheduling path (which is configured but not yet enforced). Those two areas are where surprises could still appear in production.
+
+---
+
 ## Getting started
 
 ### Setup
