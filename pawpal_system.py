@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from enum import Enum
 from typing import Optional
 
@@ -56,15 +56,17 @@ class TimeWindow:
 
     def contains(self, dt: datetime) -> bool:
         """Return True if the given datetime falls within this window."""
-        pass
+        return self.start_time <= dt.time() < self.end_time
 
     def duration_minutes(self) -> int:
         """Return the length of this window in minutes."""
-        pass
+        start_dt = datetime.combine(date.today(), self.start_time)
+        end_dt = datetime.combine(date.today(), self.end_time)
+        return int((end_dt - start_dt).total_seconds() // 60)
 
     def overlaps(self, other: TimeWindow) -> bool:
         """Return True if this window overlaps with another."""
-        pass
+        return self.start_time < other.end_time and self.end_time > other.start_time
 
 
 # ---------------------------------------------------------------------------
@@ -88,19 +90,35 @@ class Task:
 
     def mark_complete(self) -> None:
         """Set status to COMPLETED."""
-        pass
+        self.status = TaskStatus.COMPLETED
 
     def mark_skipped(self, reason: str) -> None:
         """Set status to SKIPPED and record reason in notes."""
-        pass
+        self.status = TaskStatus.SKIPPED
+        self.notes = f"Skipped: {reason}"
 
     def is_overdue(self) -> bool:
         """Return True if due_datetime has passed and task is not complete."""
-        pass
+        if self.due_datetime is None:
+            return False
+        return datetime.now() > self.due_datetime and self.status != TaskStatus.COMPLETED
 
     def get_urgency_score(self) -> float:
-        """Return a numeric score combining priority, overdue status, and due time."""
-        pass
+        """Return a numeric score combining priority, overdue status, and due time.
+
+        Higher score = schedule sooner.
+        Base score comes from priority value (1–4).
+        Overdue tasks get a +10 bonus.
+        Tasks due within 2 hours get a +2 bonus.
+        """
+        score = float(self.priority.value)
+        if self.is_overdue():
+            score += 10.0
+        if self.due_datetime:
+            minutes_until_due = (self.due_datetime - datetime.now()).total_seconds() / 60
+            if 0 < minutes_until_due <= 120:
+                score += 2.0
+        return score
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +136,11 @@ class ScheduledTask:
 
     def get_duration(self) -> int:
         """Return duration in minutes."""
-        pass
+        return int((self.end_time - self.start_time).total_seconds() // 60)
 
     def conflicts_with(self, other: ScheduledTask) -> bool:
         """Return True if this scheduled task overlaps with another."""
-        pass
+        return self.start_time < other.end_time and self.end_time > other.start_time
 
 
 # ---------------------------------------------------------------------------
@@ -141,23 +159,54 @@ class DailySchedule:
 
     def add_scheduled_task(self, st: ScheduledTask) -> None:
         """Append a ScheduledTask and update total time used."""
-        pass
+        self.scheduled_tasks.append(st)
+        self.total_time_used_minutes += st.get_duration()
 
     def add_unscheduled_task(self, t: Task) -> None:
         """Append a Task to the unscheduled list."""
-        pass
+        self.unscheduled_tasks.append(t)
 
     def get_schedule_by_pet(self, pet_id: str) -> list[ScheduledTask]:
         """Return only the scheduled tasks belonging to a specific pet."""
-        pass
+        return [st for st in self.scheduled_tasks if st.task.pet_id == pet_id]
 
     def get_completion_rate(self) -> float:
         """Return fraction of tasks marked COMPLETED vs total scheduled."""
-        pass
+        if not self.scheduled_tasks:
+            return 0.0
+        completed = sum(1 for st in self.scheduled_tasks if st.task.status == TaskStatus.COMPLETED)
+        return completed / len(self.scheduled_tasks)
 
     def to_dict(self) -> dict:
         """Serialize the schedule to a plain dict (for display / export)."""
-        pass
+        return {
+            "schedule_id": self.schedule_id,
+            "owner_id": self.owner_id,
+            "date": str(self.schedule_date),
+            "total_time_used_minutes": self.total_time_used_minutes,
+            "summary": self.summary,
+            "scheduled_tasks": [
+                {
+                    "task": st.task.name,
+                    "type": st.task.task_type.value,
+                    "priority": st.task.priority.name,
+                    "start": st.start_time.strftime("%H:%M"),
+                    "end": st.end_time.strftime("%H:%M"),
+                    "duration_minutes": st.get_duration(),
+                    "reasoning": st.reasoning,
+                }
+                for st in self.scheduled_tasks
+            ],
+            "unscheduled_tasks": [
+                {
+                    "task": t.name,
+                    "type": t.task_type.value,
+                    "priority": t.priority.name,
+                    "reason": t.notes,
+                }
+                for t in self.unscheduled_tasks
+            ],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -191,23 +240,25 @@ class Pet:
 
     def add_task(self, task: Task) -> None:
         """Append a task to this pet's task list."""
-        pass
+        self.tasks.append(task)
 
     def remove_task(self, task_id: str) -> None:
         """Remove a task by ID."""
-        pass
+        self.tasks = [t for t in self.tasks if t.task_id != task_id]
 
     def update_profile(self, **kwargs) -> None:
         """Update any profile attribute by keyword argument."""
-        pass
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def get_pending_tasks(self) -> list[Task]:
         """Return tasks with PENDING status."""
-        pass
+        return [t for t in self.tasks if t.status == TaskStatus.PENDING]
 
     def get_tasks_by_type(self, task_type: TaskType) -> list[Task]:
         """Return tasks filtered by TaskType."""
-        pass
+        return [t for t in self.tasks if t.task_type == task_type]
 
 
 # ---------------------------------------------------------------------------
@@ -225,19 +276,22 @@ class Owner:
 
     def add_pet(self, pet: Pet) -> None:
         """Append a pet to the owner's pet list."""
-        pass
+        self.pets.append(pet)
 
     def remove_pet(self, pet_id: str) -> None:
         """Remove a pet by ID."""
-        pass
+        self.pets = [p for p in self.pets if p.pet_id != pet_id]
 
     def update_profile(self, **kwargs) -> None:
         """Update any profile attribute by keyword argument."""
-        pass
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def get_schedule(self, schedule_date: date) -> DailySchedule:
         """Convenience method — delegates to Scheduler."""
-        pass
+        scheduler = Scheduler(owner=self)
+        return scheduler.generate_daily_schedule(schedule_date)
 
 
 # ---------------------------------------------------------------------------
@@ -250,27 +304,31 @@ class TaskRepository:
 
     def add_task(self, task: Task) -> None:
         """Store a task by its ID."""
-        pass
+        self.tasks[task.task_id] = task
 
     def get_task(self, task_id: str) -> Optional[Task]:
         """Retrieve a task by ID."""
-        pass
+        return self.tasks.get(task_id)
 
     def update_task(self, task_id: str, updates: dict) -> None:
         """Apply a dict of attribute updates to a stored task."""
-        pass
+        task = self.tasks.get(task_id)
+        if task:
+            for key, value in updates.items():
+                if hasattr(task, key):
+                    setattr(task, key, value)
 
     def delete_task(self, task_id: str) -> None:
         """Remove a task by ID."""
-        pass
+        self.tasks.pop(task_id, None)
 
     def get_tasks_for_pet(self, pet_id: str) -> list[Task]:
         """Return all tasks associated with a given pet."""
-        pass
+        return [t for t in self.tasks.values() if t.pet_id == pet_id]
 
     def get_overdue_tasks(self, pet_id: str) -> list[Task]:
         """Return overdue tasks for a given pet."""
-        pass
+        return [t for t in self.get_tasks_for_pet(pet_id) if t.is_overdue()]
 
 
 # ---------------------------------------------------------------------------
@@ -283,15 +341,25 @@ class NotificationService:
 
     def send_reminder(self, scheduled_task: ScheduledTask) -> None:
         """Log a reminder for an upcoming scheduled task."""
-        pass
+        msg = (
+            f"REMINDER: '{scheduled_task.task.name}' starts at "
+            f"{scheduled_task.start_time.strftime('%H:%M')}"
+        )
+        self.notification_log.append(msg)
 
     def send_daily_summary(self, schedule: DailySchedule) -> None:
         """Log a daily summary message."""
-        pass
+        msg = (
+            f"DAILY SUMMARY ({schedule.schedule_date}): "
+            f"{len(schedule.scheduled_tasks)} tasks scheduled, "
+            f"{len(schedule.unscheduled_tasks)} unscheduled. "
+            f"{schedule.total_time_used_minutes} min total."
+        )
+        self.notification_log.append(msg)
 
     def alert_overdue(self, task: Task) -> None:
         """Log an overdue alert for a task."""
-        pass
+        self.notification_log.append(f"OVERDUE: '{task.name}' is past due!")
 
 
 # ---------------------------------------------------------------------------
@@ -315,36 +383,143 @@ class Scheduler:
 
     def generate_daily_schedule(self, schedule_date: date) -> DailySchedule:
         """Build and return a DailySchedule for the given date."""
-        pass
+        schedule = DailySchedule(
+            owner_id=self.owner.owner_id,
+            schedule_date=schedule_date,
+        )
+
+        # Collect all pending tasks across all pets
+        all_tasks: list[Task] = []
+        for pet in self.pets:
+            all_tasks.extend(pet.get_pending_tasks())
+
+        # Sort by urgency
+        prioritized = self.prioritize_tasks(all_tasks)
+
+        # Assign to time slots
+        scheduled = self.fit_tasks_to_window(prioritized, self.owner.available_minutes_per_day)
+
+        for st in scheduled:
+            st.task.status = TaskStatus.SCHEDULED
+            schedule.add_scheduled_task(st)
+
+        # Anything that didn't get scheduled
+        scheduled_ids = {st.task.task_id for st in scheduled}
+        for task in prioritized:
+            if task.task_id not in scheduled_ids:
+                task.mark_skipped("Not enough time in the day")
+                schedule.add_unscheduled_task(task)
+
+        schedule.summary = self.explain_plan(schedule)
+
+        if self.notifications:
+            self.notifications.send_daily_summary(schedule)
+
+        return schedule
 
     def prioritize_tasks(self, tasks: list[Task]) -> list[Task]:
         """Return tasks sorted by urgency score (highest first)."""
-        pass
+        return sorted(tasks, key=lambda t: t.get_urgency_score(), reverse=True)
 
     def fit_tasks_to_window(
         self, tasks: list[Task], available_minutes: int
     ) -> list[ScheduledTask]:
         """Greedily assign tasks to time slots within the available window."""
-        pass
+        scheduled: list[ScheduledTask] = []
+        minutes_remaining = available_minutes
+        current_time = datetime.combine(
+            date.today(),
+            time(self.config.day_start_hour, 0)
+        )
+        buffer = self.config.buffer_minutes_between_tasks
+
+        for task in tasks:
+            total_needed = task.duration_minutes + (buffer if scheduled else 0)
+            if total_needed > minutes_remaining:
+                continue
+
+            # Add buffer gap after the previous task
+            if scheduled:
+                current_time += timedelta(minutes=buffer)
+                minutes_remaining -= buffer
+
+            start = current_time
+            end = start + timedelta(minutes=task.duration_minutes)
+
+            # Don't schedule past the end of the day
+            day_end = datetime.combine(date.today(), time(self.config.day_end_hour, 0))
+            if end > day_end:
+                continue
+
+            reasoning = self._build_reasoning(task, minutes_remaining)
+            scheduled.append(ScheduledTask(task=task, start_time=start, end_time=end, reasoning=reasoning))
+
+            current_time = end
+            minutes_remaining -= task.duration_minutes
+
+        return scheduled
 
     def check_conflicts(self, schedule: DailySchedule) -> list[ScheduledTask]:
         """Return any ScheduledTasks that overlap in time."""
-        pass
+        conflicts: list[ScheduledTask] = []
+        tasks = schedule.scheduled_tasks
+        for i, a in enumerate(tasks):
+            for b in tasks[i + 1:]:
+                if a.conflicts_with(b):
+                    a.is_conflict = True
+                    b.is_conflict = True
+                    if a not in conflicts:
+                        conflicts.append(a)
+                    if b not in conflicts:
+                        conflicts.append(b)
+        return conflicts
 
     def explain_plan(self, schedule: DailySchedule) -> str:
         """Return a human-readable explanation of why the plan was built this way."""
-        pass
+        lines = [
+            f"Plan for {schedule.schedule_date} - "
+            f"{len(schedule.scheduled_tasks)} tasks scheduled, "
+            f"{schedule.total_time_used_minutes} min used of "
+            f"{self.owner.available_minutes_per_day} available.\n"
+        ]
+        for st in schedule.scheduled_tasks:
+            lines.append(
+                f"  {st.start_time.strftime('%H:%M')}-{st.end_time.strftime('%H:%M')}  "
+                f"{st.task.name} [{st.task.priority.name}] - {st.reasoning}"
+            )
+        if schedule.unscheduled_tasks:
+            lines.append("\nNot scheduled (insufficient time):")
+            for t in schedule.unscheduled_tasks:
+                lines.append(f"  - {t.name} [{t.priority.name}]")
+        return "\n".join(lines)
 
     # --- Private helpers ---
 
     def _score_task(self, task: Task) -> float:
         """Compute a numeric score for a task used during prioritization."""
-        pass
+        return task.get_urgency_score()
 
     def _apply_time_constraints(self, task: Task) -> bool:
         """Return True if the task can fit within the owner's available time."""
-        pass
+        return task.duration_minutes <= self.owner.available_minutes_per_day
 
     def _calculate_available_slots(self) -> list[TimeWindow]:
         """Derive free time windows from owner preferences and config."""
-        pass
+        if self.owner.preferences:
+            return [w for w in self.owner.preferences if w.is_active]
+        # Fall back to a single window spanning the full config day
+        return [
+            TimeWindow(
+                label="Full day",
+                start_time=time(self.config.day_start_hour, 0),
+                end_time=time(self.config.day_end_hour, 0),
+            )
+        ]
+
+    def _build_reasoning(self, task: Task, minutes_remaining: int) -> str:
+        """Build a short explanation string for why a task was placed."""
+        return (
+            f"Priority {task.priority.name.lower()}, "
+            f"{task.duration_minutes} min, "
+            f"{minutes_remaining} min remaining in day"
+        )
